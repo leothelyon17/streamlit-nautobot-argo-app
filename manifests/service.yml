@@ -8,4 +8,4 @@ spec:
     - port: 80
       targetPort: 8501
   selector:
-    app: streamlit-app
+    app: streamlit-nautobot-argo-app
