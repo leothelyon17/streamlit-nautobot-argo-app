@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit-nautobot-argo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamlit-nautobot-argo-app
+  template:
+    metadata:
+      labels:
+        app: streamlit-nautobot-argo-app
+    spec:
+      containers:
+        - name: streamlit
+          image: <your-docker-registry>/streamlit-app:latest
+          ports:
+            - containerPort: 8501
