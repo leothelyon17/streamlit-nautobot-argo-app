@@ -14,7 +14,7 @@
        kind: Rule
        services:
          - name: streamlit-service  # <-- Replace with your service name
-           port: 8501
+           port: 80
 # --> (Optional) Add certificate secret
 # tls:
 #     secretName: your-certificate-secret
