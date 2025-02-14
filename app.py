@@ -1,42 +1,130 @@
 import streamlit as st
 import yaml
 from pathlib import Path
+from urllib.parse import urlparse
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-# --- Helpers and Dummy Implementations ---
+# =============================
+# NautobotClient Implementation
+# =============================
+class NautobotClient:
+    def __init__(
+        self,
+        url: str,
+        token: str | None = None,
+        **kwargs,
+    ):
+        self.base_url = self._parse_url(url)
+        self._token = token
+        self.verify_ssl = kwargs.get("verify_ssl", False)
+        self.retries = kwargs.get("retries", 3)
+        self.timeout = kwargs.get("timeout", 10)
+        self.proxies = kwargs.get("proxies", None)
+        self._create_session()
 
-# If you have an actual NautobotClient, import it instead.
-try:
-    from nautobot_client import NautobotClient
-except ImportError:
-    class NautobotClient:
-        def __init__(self, url, token):
-            self.url = url
-            self.token = token
+    def _parse_url(self, url: str) -> str:
+        """Checks if the provided URL has http or https and updates it if needed."""
+        parsed_url = urlparse(url)
+        if not parsed_url.scheme:
+            return f"http://{url}"
+        return parsed_url.geturl()
 
-        def http_call(self, url, method, json_data):
-            st.write(f"HTTP {method} call to {self.url}{url} with payload:")
-            st.json(json_data)
-            # Dummy response with id and display fields.
-            return {"id": 1, "display": json_data.get("name", "dummy")}
+    def _create_session(self):
+        """Creates the requests.Session object and applies the necessary parameters."""
+        self.session = requests.Session()
+        self.session.headers["Content-Type"] = "application/json"
+        self.session.headers["Accept"] = "application/json"
+        self.session.headers["Authorization"] = f"Token {self._token}"
+        if self.proxies:
+            self.session.proxies.update(self.proxies)
 
-# A simple console class that prints to Streamlit.
-class Console:
-    def log(self, message, style=None):
-        # You might map different styles to st.info/st.warning/etc.
-        st.info(message)
+        retry_method = Retry(
+            total=self.retries,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_method)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
-console = Console()
+    def http_call(
+        self,
+        method: str,
+        url: str,
+        data: dict | str | None = None,
+        json_data: dict | None = None,
+        headers: dict | None = None,
+        verify: bool = False,
+        params: dict | list[tuple] | None = None,
+    ) -> dict:
+        """
+        Performs the HTTP operation.
 
-# Utility to load YAML from a file-like object or file path.
+        Required Attributes:
+        - `method` (str): HTTP method to perform: GET, POST, etc.
+        - `url` (str): URL target (this will be appended to the base URL)
+        - `data`: Dictionary or byte data for the request body.
+        - `json_data`: Dictionary to be passed as JSON.
+        - `headers`: Dictionary of HTTP Headers.
+        - `verify`: SSL Verification.
+        - `params`: Query string parameters.
+        """
+        _request = requests.Request(
+            method=method.upper(),
+            url=self.base_url + url,
+            data=data,
+            json=json_data,
+            headers=headers,
+            params=params,
+        )
+
+        _request = self.session.prepare_request(_request)
+
+        try:
+            _response = self.session.send(request=_request, verify=verify, timeout=self.timeout)
+        except Exception as err:
+            raise err
+
+        # Raise error if object already exists.
+        if "already exists" in _response.text:
+            raise ValueError(_response.text)
+
+        try:
+            _response.raise_for_status()
+        except Exception as err:
+            raise err
+
+        if _response.status_code == 204:
+            return {}
+        return _response.json()
+
+# =============================
+# Helper Functions
+# =============================
+
 def load_yaml(source):
-    # If the source has a 'read' attribute, assume it's a file-like object (e.g. from st.file_uploader)
+    """
+    Loads a YAML file from a file path or a file-like object.
+    """
     if hasattr(source, "read"):
         return yaml.safe_load(source)
     else:
         with open(source, "r") as f:
             return yaml.safe_load(f)
 
-# --- Nautobot Data Loader Function ---
+# A simple logging class to print messages in Streamlit
+class Console:
+    def log(self, message, style=None):
+        # You can adjust the style mapping as needed
+        st.info(message)
+
+console = Console()
+
+# =============================
+# Nautobot Data Loader Function
+# =============================
 
 def utils_load_nautobot_data(
     nautobot_token: str,
@@ -68,40 +156,40 @@ def utils_load_nautobot_data(
 
     # Create Roles in Nautobot
     roles = nautobot_client.http_call(
-        url="/api/extras/roles/",
         method="post",
+        url="/api/extras/roles/",
         json_data={"name": "network_device", "content_types": ["dcim.device"]},
     )
     console.log(f"Created Role: {roles.get('display')}", style="info")
 
     # Create Manufacturers in Nautobot
     manufacturers = nautobot_client.http_call(
-        url="/api/dcim/manufacturers/",
         method="post",
+        url="/api/dcim/manufacturers/",
         json_data={"name": "Arista"},
     )
     console.log(f"Created Manufacturer: {manufacturers.get('display')}", style="info")
 
     # Create Device Types in Nautobot
     device_types = nautobot_client.http_call(
-        url="/api/dcim/device-types/",
         method="post",
+        url="/api/dcim/device-types/",
         json_data={"manufacturer": "Arista", "model": "cEOS"},
     )
     console.log(f"Created Device Types: {device_types.get('display')}", style="info")
 
     # Create Location Types
     location_type = nautobot_client.http_call(
-        url="/api/dcim/location-types/",
         method="post",
+        url="/api/dcim/location-types/",
         json_data={"name": "site", "content_types": ["dcim.device"]},
     )
     console.log(f"Created Location Type: {location_type.get('display')}", style="info")
 
     # Create Statuses
     statuses = nautobot_client.http_call(
-        url="/api/extras/statuses/",
         method="post",
+        url="/api/extras/statuses/",
         json_data={
             "name": "lab-active",
             "content_types": [
@@ -116,8 +204,8 @@ def utils_load_nautobot_data(
     )
     console.log(f"Created Status: {statuses.get('display')}", style="info")
     alerted_statuses = nautobot_client.http_call(
-        url="/api/extras/statuses/",
         method="post",
+        url="/api/extras/statuses/",
         json_data={
             "name": "Alerted",
             "content_types": [
@@ -134,8 +222,8 @@ def utils_load_nautobot_data(
 
     # Create Locations
     locations = nautobot_client.http_call(
-        url="/api/dcim/locations/",
         method="post",
+        url="/api/dcim/locations/",
         json_data={
             "name": "lab",
             "location_type": {"id": location_type.get("id")},
@@ -146,8 +234,8 @@ def utils_load_nautobot_data(
 
     # Create IPAM Namespace
     ipam_namespace = nautobot_client.http_call(
-        url="/api/ipam/namespaces/",
         method="post",
+        url="/api/ipam/namespaces/",
         json_data={"name": "lab-default"},
     )
     console.log(f"Created IPAM Namespace: {ipam_namespace.get('display')}", style="info")
@@ -155,8 +243,8 @@ def utils_load_nautobot_data(
     # Create Prefixes for the Namespace
     for prefix_data in extra_topology_vars_dict.get("prefixes", []):
         prefix = nautobot_client.http_call(
-            url="/api/ipam/prefixes/",
             method="post",
+            url="/api/ipam/prefixes/",
             json_data={
                 "prefix": prefix_data["prefix"],
                 "namespace": {"id": ipam_namespace.get("id")},
@@ -169,8 +257,8 @@ def utils_load_nautobot_data(
 
     # Create Management Prefix
     mgmt_prefix = nautobot_client.http_call(
-        url="/api/ipam/prefixes/",
         method="post",
+        url="/api/ipam/prefixes/",
         json_data={
             "prefix": topology_dict.get("mgmt", {}).get("ipv4-subnet"),
             "namespace": {"id": ipam_namespace.get("id")},
@@ -184,8 +272,8 @@ def utils_load_nautobot_data(
     # Create Devices and their associated data
     for node, node_data in topology_dict.get("topology", {}).get("nodes", {}).items():
         device = nautobot_client.http_call(
-            url="/api/dcim/devices/",
             method="post",
+            url="/api/dcim/devices/",
             json_data={
                 "name": node,
                 "role": {"id": roles.get("id")},
@@ -205,8 +293,8 @@ def utils_load_nautobot_data(
         # Create IP Addresses and Interfaces
         for intf_data in node_data.get("interfaces", []):
             ip_address = nautobot_client.http_call(
-                url="/api/ipam/ip-addresses/",
                 method="post",
+                url="/api/ipam/ip-addresses/",
                 json_data={
                     "address": intf_data["ipv4"],
                     "status": {"id": statuses.get("id")},
@@ -217,8 +305,8 @@ def utils_load_nautobot_data(
             console.log(f"Created IP Address: {ip_address.get('display')}", style="info")
 
             interface = nautobot_client.http_call(
-                url="/api/dcim/interfaces/",
                 method="post",
+                url="/api/dcim/interfaces/",
                 json_data={
                     "device": {"id": device.get("id")},
                     "name": intf_data["name"],
@@ -236,8 +324,8 @@ def utils_load_nautobot_data(
 
             # Create IP address to interface mapping
             mapping = nautobot_client.http_call(
-                url="/api/ipam/ip-address-to-interface/",
                 method="post",
+                url="/api/ipam/ip-address-to-interface/",
                 json_data={
                     "ip_address": {"id": ip_address.get("id")},
                     "interface": {"id": interface.get("id")},
@@ -250,8 +338,8 @@ def utils_load_nautobot_data(
 
         # Create Mgmt IP Address
         mgmt_ip_address = nautobot_client.http_call(
-            url="/api/ipam/ip-addresses/",
             method="post",
+            url="/api/ipam/ip-addresses/",
             json_data={
                 "address": node_data.get("mgmt-ipv4"),
                 "status": {"id": statuses.get("id")},
@@ -263,8 +351,8 @@ def utils_load_nautobot_data(
 
         # Create Mgmt Interface
         mgmt_interface = nautobot_client.http_call(
-            url="/api/dcim/interfaces/",
             method="post",
+            url="/api/dcim/interfaces/",
             json_data={
                 "device": {"id": device.get("id")},
                 "name": "Management0",
@@ -282,8 +370,8 @@ def utils_load_nautobot_data(
 
         # Create Mgmt IP address to interface mapping
         mgmt_mapping = nautobot_client.http_call(
-            url="/api/ipam/ip-address-to-interface/",
             method="post",
+            url="/api/ipam/ip-address-to-interface/",
             json_data={
                 "ip_address": {"id": mgmt_ip_address.get("id")},
                 "interface": {"id": mgmt_interface.get("id")},
@@ -296,15 +384,17 @@ def utils_load_nautobot_data(
 
         # Update Device with Primary IP Address
         device = nautobot_client.http_call(
-            url=f"/api/dcim/devices/{device.get('id')}/",
             method="patch",
+            url=f"/api/dcim/devices/{device.get('id')}/",
             json_data={
                 "primary_ip4": {"id": mgmt_ip_address.get("id")},
             },
         )
         console.log(f"Updated Device: {device.get('display')}", style="info")
 
-# --- Streamlit App UI ---
+# =============================
+# Streamlit App UI
+# =============================
 
 st.title("Streamlit Nautobot Data Loader")
 
@@ -332,8 +422,12 @@ if st.button("Load Nautobot Data"):
         st.error("Please upload the Extra Topology Vars YAML file.")
     else:
         st.info("Starting data load...")
-        utils_load_nautobot_data(
-            nautobot_token, topology_file, extra_topology_vars_file, nautobot_url
-        )
-        st.success("Data load process completed (check logs above).")
+        try:
+            utils_load_nautobot_data(
+                nautobot_token, topology_file, extra_topology_vars_file, nautobot_url
+            )
+            st.success("Data load process completed (check logs above).")
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
+
 
