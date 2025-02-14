@@ -16,5 +16,6 @@ spec:
       containers:
         - name: streamlit
           image: ghcr.io/leothelyon17/streamlit-nautobot-argo-app:main
+          imagePullPolicy: Always
           ports:
             - containerPort: 8501
